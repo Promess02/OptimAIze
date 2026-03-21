@@ -1,0 +1,199 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - agent_network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - agent_network
+
+  neo4j:
+    image: neo4j:5.15
+    container_name: neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/password
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4j_data:/data
+    networks:
+      - agent_network
+
+  redis_training:
+    image: redis:7-alpine
+    container_name: redis_training
+    ports:
+      - "16379:6379"
+    networks:
+      - agent_network
+
+  redis_demand:
+    image: redis:7-alpine
+    container_name: redis_demand
+    ports:
+      - "6380:6379"
+    networks:
+      - agent_network
+
+  redis_inventory:
+    image: redis:7-alpine
+    container_name: redis_inventory
+    ports:
+      - "6381:6379"
+    networks:
+      - agent_network
+
+  redis_pricing:
+    image: redis:7-alpine
+    container_name: redis_pricing
+    ports:
+      - "6382:6379"
+    networks:
+      - agent_network
+
+  redis_procurement:
+    image: redis:7-alpine
+    container_name: redis_procurement
+    ports:
+      - "6383:6379"
+    networks:
+      - agent_network
+
+  training_service:
+    build:
+      context: ./services/training
+    container_name: training_service
+    depends_on:
+      - kafka
+      - redis_training
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis_training
+      - REDIS_PORT=6379
+      - DB_PATH=/data/ecommerce.db
+      - MODELS_PATH=/models
+    volumes:
+      - ./:/data
+      - ./models:/models
+    networks:
+      - agent_network
+
+  orchestrator:
+    build:
+      context: ./services/orchestrator
+    container_name: orchestrator
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    networks:
+      - agent_network
+
+  demand_agent:
+    build:
+      context: ./agents/demand
+    container_name: demand_agent
+    depends_on:
+      - kafka
+      - redis_demand
+      - neo4j
+    ports:
+      - "8001:8001"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis_demand
+      - REDIS_PORT=6379
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_PASSWORD=password
+    networks:
+      - agent_network
+
+  inventory_agent:
+    build:
+      context: ./agents/inventory
+    container_name: inventory_agent
+    depends_on:
+      - kafka
+      - redis_inventory
+      - neo4j
+    ports:
+      - "8002:8002"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis_inventory
+      - REDIS_PORT=6379
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_PASSWORD=password
+    networks:
+      - agent_network
+
+  pricing_agent:
+    build:
+      context: ./agents/pricing
+    container_name: pricing_agent
+    depends_on:
+      - kafka
+      - redis_pricing
+      - neo4j
+    ports:
+      - "8003:8003"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis_pricing
+      - REDIS_PORT=6379
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_PASSWORD=password
+    networks:
+      - agent_network
+
+  procurement_agent:
+    build:
+      context: ./agents/procurement
+    container_name: procurement_agent
+    depends_on:
+      - kafka
+      - redis_procurement
+    ports:
+      - "8004:8004"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis_procurement
+      - REDIS_PORT=6379
+      - DB_PATH=/data/ecommerce.db
+      - MODELS_PATH=/models
+      - SCHEDULE_MINUTES=30
+      - TOP_PRODUCTS_LIMIT=10
+    volumes:
+      - ./:/data
+      - ./models:/models
+    networks:
+      - agent_network
+
+volumes:
+  neo4j_data:
+
+networks:
+  agent_network:
+    driver: bridge

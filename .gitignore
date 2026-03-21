@@ -1,0 +1,9 @@
+*.png
+*.csv
+*.md
+!README.md
+!**/README.md
+*.pyc
+*.log
+*.keras
+*.pkl

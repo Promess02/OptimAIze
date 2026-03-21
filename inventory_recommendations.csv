@@ -1,0 +1,9 @@
+Product,Horizon,Total Demand,Recommended Stock,Safety Stock
+P0001,3 months,314,323,8
+P0001,6 months,627,635,8
+P0004,3 months,154,157,3
+P0004,6 months,313,316,3
+P0005,3 months,145,147,3
+P0005,6 months,290,292,3
+P0006,3 months,154,157,3
+P0006,6 months,305,308,3
