@@ -41,6 +41,43 @@ services:
     networks:
       - agent_network
 
+  mongodb:
+    image: mongo:7
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - agent_network
+
+  mongodb_init:
+    image: python:3.11-slim
+    container_name: mongodb_init
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    working_dir: /app
+    command: >
+      sh -c "
+      pip install --no-cache-dir pymongo &&
+      python sqlite_to_mongodb.py
+      --sqlite-path /app/ecommerce.db
+      --mongo-uri mongodb://mongodb:27017
+      --mongo-db ecommerce
+      "
+    volumes:
+      - ./:/app
+    restart: "no"
+    networks:
+      - agent_network
+
   redis_training:
     image: redis:7-alpine
     container_name: redis_training
@@ -193,6 +230,7 @@ services:
 
 volumes:
   neo4j_data:
+  mongo_data:
 
 networks:
   agent_network:
