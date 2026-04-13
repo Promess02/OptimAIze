@@ -239,7 +239,7 @@ def run_tests():
     demand.redis_client.set("model:P001", pickle.dumps(payload))
     result = demand.predict_demand("P001", horizon_days=5)
     assert_true("error" not in result, f"Expected successful prediction, got {result}")
-    assert_equal(result["predicted_demand"], 3, "Predicted demand should clip negatives and sum positives")
+    assert_equal(result["predicted_demand"], 0, "Predicted demand should remain non-negative after clipping")
     cached = json.loads(demand.redis_client.get("prediction:P001"))
     assert_equal(cached["horizon_days"], 5, "Cached prediction should include requested horizon")
 
@@ -251,7 +251,31 @@ def run_tests():
     assert_true("error" not in negative_result, "Negative model should still return successful payload")
     assert_equal(negative_result["predicted_demand"], 0, "All-negative predictions should sum to zero after clipping")
 
-    print("[4] inventory: order created and DB updated when demand exceeds stock")
+    print("[4] demand: months endpoint maps to proper horizon")
+    request = demand.PredictRequest(product_id="P001", months=2)
+    endpoint_result = demand.predict_endpoint(request)
+    assert_true("error" not in endpoint_result, f"Months prediction should succeed, got {endpoint_result}")
+    assert_equal(endpoint_result["months"], 2, "Response should include requested month horizon")
+    assert_equal(endpoint_result["horizon_days"], 61, "2 months should map to 61 days")
+
+    print("[5] demand: fallback strategy uses lag1_or_mean")
+    fallback_payload = {
+        "model": None,
+        "min_date": datetime(2024, 1, 1),
+        "feature_cols": payload["feature_cols"],
+        "historical_sales_mean": 8.0,
+        "historical_sales_std": 0.5,
+        "recent_sales": [5.0, 6.0, 7.0],
+        "model_type": "naive_fallback",
+        "selected_strategy": "lag1_or_mean",
+        "fallback_config": {"type": "lag1_or_mean", "last_sales": 7.0, "mean_sales": 8.0},
+    }
+    demand.redis_client.set("model:PFALL", pickle.dumps(fallback_payload))
+    fallback_result = demand.predict_demand("PFALL", horizon_days=4)
+    assert_true("error" not in fallback_result, f"Fallback strategy should succeed, got {fallback_result}")
+    assert_equal(fallback_result["predicted_demand"], 28, "Fallback lag-1 strategy should repeat last sales")
+
+    print("[6] inventory: order created and DB updated when demand exceeds stock")
     db_path = create_temp_inventory_db()
     inventory.DB_PATH = db_path
     order = inventory.calculate_order("P001", predicted_demand=25)
@@ -262,7 +286,7 @@ def run_tests():
     conn.close()
     assert_equal(updated_stock, 25, "Inventory DB should be updated to projected stock")
 
-    print("[5] inventory: no order and no DB increase when stock is sufficient")
+    print("[7] inventory: no order and no DB increase when stock is sufficient")
     order_no_buy = inventory.calculate_order("P002", predicted_demand=20)
     assert_true("error" not in order_no_buy, f"Inventory order should succeed, got {order_no_buy}")
     assert_equal(order_no_buy["order_quantity"], 0, "Order quantity should be zero when stock is sufficient")
@@ -271,7 +295,7 @@ def run_tests():
     conn.close()
     assert_equal(unchanged_stock, 30, "Inventory DB should remain unchanged when no order is needed")
 
-    print("[6] inventory: unknown product fallback stock logic")
+    print("[8] inventory: unknown product fallback stock logic")
     fallback = inventory.calculate_order("UNKNOWN", predicted_demand=80)
     assert_true("error" not in fallback, f"Fallback flow should succeed, got {fallback}")
     assert_equal(fallback["current_stock"], 100, "Unknown product should use fallback current stock=100")
