@@ -5,6 +5,7 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import xgboost as xgb
+from sklearn.metrics import mean_squared_error
 from datetime import timedelta, datetime
 from confluent_kafka import Consumer, Producer
 import redis
@@ -21,6 +22,10 @@ DB_PATH = os.getenv('DB_PATH', '/data/ecommerce.db')
 MODELS_PATH = os.getenv('MODELS_PATH', '/models')
 MIN_TRAIN_ROWS = int(os.getenv('MIN_TRAIN_ROWS', '30'))
 VARIANCE_STD_THRESHOLD = float(os.getenv('VARIANCE_STD_THRESHOLD', '1.0'))
+VAL_RATIO = float(os.getenv('VAL_RATIO', '0.15'))
+TEST_RATIO = float(os.getenv('TEST_RATIO', '0.15'))
+MIN_SPLIT_ROWS = int(os.getenv('MIN_SPLIT_ROWS', '7'))
+MIN_TRAIN_ROWS_SPLIT = int(os.getenv('MIN_TRAIN_ROWS_SPLIT', '14'))
 
 FEATURE_COLUMNS = [
     'dayofweek',
@@ -56,6 +61,44 @@ consumer_conf = {
 }
 consumer = Consumer(consumer_conf)
 consumer.subscribe(['database_changes'])
+
+
+def _rmse(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    n = min(len(y_true), len(y_pred))
+    if n == 0:
+        return float('inf')
+    return float(np.sqrt(mean_squared_error(y_true[:n], y_pred[:n])))
+
+
+def split_train_val_test(df):
+    """Chronological train/validation/test split used for leakage-safe strategy selection."""
+    n = len(df)
+    if n < (MIN_TRAIN_ROWS_SPLIT + 2 * MIN_SPLIT_ROWS):
+        return None
+
+    val_rows = max(MIN_SPLIT_ROWS, int(round(n * VAL_RATIO)))
+    test_rows = max(MIN_SPLIT_ROWS, int(round(n * TEST_RATIO)))
+    train_rows = n - val_rows - test_rows
+
+    if train_rows < MIN_TRAIN_ROWS_SPLIT:
+        needed = MIN_TRAIN_ROWS_SPLIT - train_rows
+        trim_val = min(needed, val_rows - MIN_SPLIT_ROWS)
+        val_rows -= max(0, trim_val)
+        needed -= max(0, trim_val)
+        if needed > 0:
+            trim_test = min(needed, test_rows - MIN_SPLIT_ROWS)
+            test_rows -= max(0, trim_test)
+
+    train_rows = n - val_rows - test_rows
+    if train_rows < MIN_TRAIN_ROWS_SPLIT:
+        return None
+
+    train_df = df.iloc[:train_rows].copy()
+    val_df = df.iloc[train_rows:train_rows + val_rows].copy()
+    test_df = df.iloc[train_rows + val_rows:].copy()
+    return train_df, val_df, test_df
 
 def extract_time_features(df, is_future=False, min_date=None):
     """Extract notebook-aligned temporal features."""
@@ -153,31 +196,114 @@ def train_model_for_product(product_id):
             redis_client.set(f"model:{product_id}", pickle.dumps(payload))
             return {'status': 'fallback'}
 
-        X_train = df_sales[FEATURE_COLUMNS]
-        y_train = df_sales['sales']
+        split = split_train_val_test(df_sales)
+        if split is None:
+            logger.info(
+                "Product %s has too few rows for train/val/test split (%s), using default XGBoost strategy",
+                product_id,
+                len(df_sales),
+            )
+            train_df = df_sales
+            val_df = None
+            test_df = None
+        else:
+            train_df, val_df, test_df = split
+
+        X_train = train_df[FEATURE_COLUMNS]
+        y_train = train_df['sales']
 
         model = xgb.XGBRegressor(
             objective='reg:squarederror',
-            n_estimators=200,
-            max_depth=6,
-            learning_rate=0.05,
-            subsample=0.8,
-            colsample_bytree=0.8,
+            eval_metric='rmse',
+            n_estimators=2000,
+            max_depth=4,
+            learning_rate=0.03,
+            min_child_weight=5,
+            subsample=0.85,
+            colsample_bytree=0.85,
+            reg_alpha=0.2,
+            reg_lambda=2.0,
             tree_method='hist',
             random_state=42,
+            n_jobs=-1,
+            early_stopping_rounds=120,
         )
-        model.fit(X_train, y_train)
+
+        selected_strategy = 'xgb'
+        strategy_scores = {}
+        test_metrics = {}
+
+        if val_df is not None and len(val_df) > 0:
+            X_val = val_df[FEATURE_COLUMNS]
+            y_val = val_df['sales']
+            model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+
+            val_xgb = np.clip(model.predict(X_val), 0, None)
+            val_lag1 = np.clip(val_df['sales_lag_1'].values, 0, None)
+            val_zero = np.zeros(len(y_val), dtype=float)
+            val_mean = np.full(len(y_val), float(y_train.mean()), dtype=float)
+
+            strategy_scores = {
+                'xgb': _rmse(y_val.values, val_xgb),
+                'lag1': _rmse(y_val.values, val_lag1),
+                'zero': _rmse(y_val.values, val_zero),
+                'mean': _rmse(y_val.values, val_mean),
+            }
+
+            zero_share = float((train_df['sales'] <= 0).mean())
+            mean_sales = float(train_df['sales'].mean())
+            intermittent_low_demand = (zero_share >= 0.35) and (mean_sales < 50)
+
+            if intermittent_low_demand:
+                candidate_keys = [k for k in ('lag1', 'zero', 'mean') if np.isfinite(strategy_scores.get(k, float('inf')))]
+                selected_strategy = min(candidate_keys, key=lambda k: strategy_scores[k]) if candidate_keys else 'xgb'
+            else:
+                selected_strategy = min(strategy_scores, key=strategy_scores.get)
+
+            if test_df is not None and len(test_df) > 0:
+                X_test = test_df[FEATURE_COLUMNS]
+                y_test = test_df['sales'].values
+                test_preds = {
+                    'xgb': np.clip(model.predict(X_test), 0, None),
+                    'lag1': np.clip(test_df['sales_lag_1'].values, 0, None),
+                    'zero': np.zeros(len(y_test), dtype=float),
+                    'mean': np.full(len(y_test), float(y_train.mean()), dtype=float),
+                }
+                selected_test = test_preds[selected_strategy]
+                test_metrics = {
+                    'selected_strategy_rmse': _rmse(y_test, selected_test),
+                    'xgb_rmse': _rmse(y_test, test_preds['xgb']),
+                    'lag1_rmse': _rmse(y_test, test_preds['lag1']),
+                    'zero_rmse': _rmse(y_test, test_preds['zero']),
+                    'mean_rmse': _rmse(y_test, test_preds['mean']),
+                }
+        else:
+            model.fit(X_train, y_train, verbose=False)
 
         sales_series = df_sales['sales'].astype(float)
+        if selected_strategy == 'xgb':
+            payload_model = model
+            payload_model_type = 'xgboost'
+        else:
+            payload_model = None
+            payload_model_type = 'naive_fallback'
+
+        fallback_type_map = {
+            'xgb': 'model',
+            'lag1': 'lag1',
+            'zero': 'zero',
+            'mean': 'mean',
+        }
+
         # Store model in Redis
         payload = {
-            'model': model,
+            'model': payload_model,
             'min_date': min_date,
             'trained_at': datetime.now().isoformat(),
             'product_id': product_id,
             'feature_cols': FEATURE_COLUMNS,
-            'model_type': 'xgboost',
-            'selected_strategy': 'xgboost_default',
+            'model_type': payload_model_type,
+            'selected_strategy': selected_strategy,
             'historical_sales_mean': float(sales_series.mean()),
             'historical_sales_std': float(sales_series.std() or 0.0),
             'recent_sales': [float(v) for v in sales_series.tail(60).tolist()],
@@ -186,6 +312,20 @@ def train_model_for_product(product_id):
                 'mean_sales': float(sales_series.mean()),
                 'num_rows': int(len(df_sales)),
                 'unique_sales': int(sales_series.nunique()),
+            },
+            'strategy_scores_val_rmse': strategy_scores,
+            'test_metrics': test_metrics,
+            'split_meta': {
+                'val_ratio': VAL_RATIO,
+                'test_ratio': TEST_RATIO,
+                'train_rows': int(len(train_df)),
+                'val_rows': int(len(val_df)) if val_df is not None else 0,
+                'test_rows': int(len(test_df)) if test_df is not None else 0,
+            },
+            'fallback_config': {
+                'type': fallback_type_map.get(selected_strategy, 'lag1_or_mean'),
+                'last_sales': float(sales_series.iloc[-1]) if len(sales_series) else 0.0,
+                'mean_sales': float(sales_series.mean()) if len(sales_series) else 0.0,
             },
         }
         model_bytes = pickle.dumps(payload)

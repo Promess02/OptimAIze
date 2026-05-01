@@ -1,0 +1,49 @@
+flowchart LR
+  subgraph Infra["Infrastruktura"]
+    K["Kafka"]
+    R1["Redis - trenowanie"]
+    R2["Redis - popyt"]
+    R3["Redis - zapasy"]
+    R4["Redis - ceny"]
+    R5["Redis - zaopatrzenie"]
+    DB[("SQLite")]
+  end
+
+  subgraph Services["Serwisy"]
+    T["Serwis trenowania"]
+    O["Orkiestrator"]
+  end
+
+  subgraph Agents["Agenci"]
+    D["Agent popytu"]
+    I["Agent zapasów"]
+    P["Agent cen"]
+    PR["Agent zaopatrzenia"]
+  end
+
+  DB -->|sprzedaż| T
+  T -->|model:id| R1
+  T -->|trenowanie_gotowe| K
+
+  K -->|zdarzenia| O
+  O -->|prognozy_popytu| K
+  O -->|aktualizacje_zapasów| K
+  O -->|aktualizacje_cen| K
+
+  K -->|zmiany_w_bazie| D
+  D -->|prognoza:id| R2
+  D -->|prognozy_popytu| K
+
+  K -->|prognozy_popytu| I
+  I -->|zamówienie:id| R3
+  I -->|aktualizuj_zapasy| DB
+  I -->|aktualizacje_zapasów| K
+
+  K -->|aktualizacje_zapasów| P
+  P -->|cena:id| R4
+  P -->|aktualizuj_ceny| DB
+  P -->|aktualizacje_cen| K
+
+  K -->|zmiany_w_bazie| PR
+  PR -->|model_zaop:id| R5
+  PR -->|raporty| K

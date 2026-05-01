@@ -1,0 +1,30 @@
+sequenceDiagram
+  participant U as Operator/Użytkownik
+  participant API as API Inventory Agent
+  participant D as Demand Agent
+  participant DB as SQLite
+  participant R as Redis inventory
+  participant K as Kafka
+  participant P as Pricing Agent
+
+  U->>API: POST /order {product_id, okres_dni}
+  API->>D: Pobierz prognozę popytu dla okresu
+  D-->>API: predicted_demand
+
+  API->>DB: Odczytaj inventory.current_stock
+  DB-->>API: current_stock
+
+  API->>API: Oblicz order_quantity = max(0, predicted_demand - current_stock)
+
+  alt Zamówienie wymagane (order_quantity > 0)
+    API->>DB: UPDATE inventory.current_stock
+    API->>R: Zapisz order:{product_id}
+    API->>K: Opublikuj inventory_updates
+    K->>P: Przekaż inventory_updates
+    P->>DB: UPDATE inventory.price
+    P->>K: Opublikuj price_updates
+  else Brak zamówienia (order_quantity = 0)
+    API->>R: Zapisz order:{product_id} (bez zmian stanu)
+  end
+
+  API-->>U: 200 OK {product_id, current_stock, predicted_demand, order_quantity, projected_stock}

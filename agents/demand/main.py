@@ -179,8 +179,12 @@ def predict_demand(product_id, horizon_days=60):
             preds = []
             strategy = model_data.get('selected_strategy', 'lag1_or_mean')
             for _ in range(horizon_days):
-                if strategy == 'lag1_or_mean':
+                if strategy in ('lag1_or_mean', 'lag1'):
                     next_pred = float(simulated_history[-1]) if simulated_history else default_mean
+                elif strategy == 'zero':
+                    next_pred = 0.0
+                elif strategy == 'mean':
+                    next_pred = default_mean
                 else:
                     next_pred = default_mean
                 next_pred = max(0.0, next_pred)
@@ -253,7 +257,7 @@ def predict_demand(product_id, horizon_days=60):
             "confidence_score": 0.85,
             "horizon_days": horizon_days,
             "monthly_forecast": monthly.to_dict(orient='records'),
-            "strategy": model_data.get('selected_strategy', 'xgboost_default'),
+            "strategy": model_data.get('selected_strategy', 'xgb'),
         }
     except Exception as e:
         return {"error": str(e), "product_id": product_id}
