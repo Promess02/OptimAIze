@@ -67,7 +67,7 @@ neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=("neo4j", os.getenv("NEO4J_P
 pricing_constraints = PricingConstraints(
     min_margin_pct=float(os.getenv("MIN_MARGIN_PCT", "0.10")),
     max_competitor_gap_pct=float(os.getenv("MAX_COMPETITOR_GAP_PCT", "0.20")),
-    max_step_pct=float(os.getenv("MAX_STEP_PCT", "0.15")),
+    max_step_pct=float(os.getenv("MAX_STEP_PCT", "0.10")),
 )
 pricing_policy = RuleBasedRLPolicy()
 demand_sandbox = DemandSandbox(DB_PATH, MODELS_PATH)

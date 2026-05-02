@@ -22,14 +22,14 @@ def assert_true(condition, message):
 
 
 def run():
-    constraints = PricingConstraints(min_margin_pct=0.1, max_competitor_gap_pct=0.2, max_step_pct=0.15)
+    constraints = PricingConstraints(min_margin_pct=0.1, max_competitor_gap_pct=0.2, max_step_pct=0.10)
 
     p, violations = constraints.apply(candidate_price=50, current_price=100, unit_cost=95, competitor_price=100)
     assert_true(p >= 104.5, "Price should be clamped above cost floor")
     assert_true("floor_margin" in violations, "Should report floor violation")
 
     p2, violations2 = constraints.apply(candidate_price=150, current_price=100, unit_cost=60, competitor_price=100)
-    assert_true(p2 <= 115, "Step cap should limit extreme increases")
+    assert_true(p2 <= 110, "Step cap should limit extreme increases")
     assert_true("step_up_cap" in violations2 or "competitor_cap" in violations2, "Should apply at least one cap")
 
     policy = RuleBasedRLPolicy()

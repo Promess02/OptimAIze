@@ -5,7 +5,7 @@ from dataclasses import dataclass
 class PricingConstraints:
     min_margin_pct: float = 0.10
     max_competitor_gap_pct: float = 0.20
-    max_step_pct: float = 0.15
+    max_step_pct: float = 0.10
 
     def apply(
         self,
