@@ -92,7 +92,7 @@ def check_cached_models(products, horizon_days=1):
     return cached, missing
 
 def run_pretraining_with_progress(limit=TOP_PRODUCTS_LIMIT):
-    """Run training service and parse progress lines from train_top10.py output."""
+    """Run training service in batch mode and parse progress."""
     cmd = (
         "cd /home/miko/magister && "
         "docker-compose run --rm "
@@ -101,7 +101,7 @@ def run_pretraining_with_progress(limit=TOP_PRODUCTS_LIMIT):
         "-e DB_PATH=/data/ecommerce.db "
         "-e REDIS_HOST=redis_demand "
         "-e REDIS_PORT=6379 "
-        "training_service python /data/agents/demand/train_top10.py"
+        "training_service python /data/services/training/main.py --batch-train"
     )
 
     try:

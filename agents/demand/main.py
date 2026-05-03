@@ -1,111 +1,217 @@
+import os
+import json
+import pickle
+import threading
+from datetime import datetime, timedelta
+from confluent_kafka import Consumer, Producer
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import uvicorn
+import redis
 import pandas as pd
 import numpy as np
+from neo4j import GraphDatabase
 
-def generate_demand_forecast(df):
-    """
-    Train an XGBoost model on historical data and predict demand.
-    Exported from sales_forecasting_models.ipynb logic.
-    """
+try:
+    from crewai import Agent, Task, Crew, Process
+except Exception:
+    class Agent:
+        def __init__(self, *args, **kwargs): pass
+    class Task:
+        def __init__(self, *args, **kwargs):
+            self.description = kwargs.get('description', '')
+            self.expected_output = kwargs.get('expected_output', '')
+            self.agent = kwargs.get('agent')
+    class Crew:
+        def __init__(self, *args, **kwargs):
+            self.tasks = kwargs.get('tasks', [])
+        def kickoff(self):
+            return f"Fallback demand analysis: {self.tasks[0].description if self.tasks else ''}"
+    class Process:
+        sequential = "sequential"
+
+app = FastAPI(title="Demand Agent API")
+
+KAFKA_BROKER = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka:29092')
+REDIS_HOST = os.getenv('REDIS_HOST', 'redis_demand')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+NEO4J_URI = os.getenv('NEO4J_URI', 'bolt://neo4j:7687')
+
+redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
+redis_client_decoded = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=("neo4j", os.getenv("NEO4J_PASSWORD", "password")))
+
+class PredictRequest(BaseModel):
+    product_id: str
+    horizon_days: int = 60
+    months: int | None = None
+
+analityk_popytu = Agent(
+    role="Analityk Popytu",
+    goal="Dokładne prognozowanie przyszłego wolumenu sprzedaży.",
+    backstory="Analizujesz dane historyczne i wyniki modeli uczenia maszynowego, aby dostarczyć wiarygodne probabilistyczne prognozy popytu.",
+    verbose=True,
+    allow_delegation=False
+)
+
+producer = Producer({'bootstrap.servers': KAFKA_BROKER})
+consumer = Consumer({
+    'bootstrap.servers': KAFKA_BROKER,
+    'group.id': 'demand_agent_group',
+    'auto.offset.reset': 'earliest'
+})
+consumer.subscribe(['training_completed'])
+
+def extract_time_features(df, min_date):
     df = df.copy()
-    if len(df) < 10:
-        df['predicted_demand'] = df['sales']
-        return df
-
-    # Feature engineering for ML Model
     df['dayofweek'] = df['date'].dt.dayofweek
     df['month'] = df['date'].dt.month
-    df['sales_lag_1'] = df['sales'].shift(1).fillna(0)
-    df['sales_lag_7'] = df['sales'].shift(7).fillna(0)
-    df['sales_roll_7'] = df['sales'].rolling(window=7, min_periods=1).mean()
-    
-    # Target and Features
-    target = 'sales'
-    features = ['dayofweek', 'month', 'sales_lag_1', 'sales_lag_7', 'sales_roll_7']
-    
-    # Splitting to train on past and predict to mimic an out-of-sample or at least fitted baseline
-    # For simulation baseline usage, we'll train on the whole series and provide in-sample + out-of-sample predictions
-    # or just train on the first 70% and predict the rest. Using the whole history as baseline is a simpler proxy.
-    X = df[features]
-    y = df[target]
-
-    import xgboost as xgb
-    model = xgb.XGBRegressor(
-        objective='reg:squarederror',
-        n_estimators=100,
-        max_depth=4,
-        learning_rate=0.05,
-        random_state=42
-    )
-    
-    model.fit(X, y)
-    df['predicted_demand'] = np.clip(model.predict(X), 0, None)
-    
+    df['day'] = df['date'].dt.day
+    df['year'] = df['date'].dt.year
     return df
 
-def predict_demand(model, current_features):
-    """
-    Predict demand using a pre-trained model (e.g., LightGBM, XGBoost, or LSTM).
-    """
-    # For tree-based models, features should be a 2D array or DataFrame
-    predicted_demand = model.predict(current_features)
-    # Ensure no negative demand
-    return max(0.0, predicted_demand[0])
-
-def adjust_price(current_price, predicted_demand, avg_demand):
-    """
-    Adjust the product price based on predicted demand relative to the average demand.
-    """
-    # Define thresholds for high and low demand (e.g., +/- 15% of average demand)
-    high_demand_threshold = avg_demand * 1.15
-    low_demand_threshold = avg_demand * 0.85
+def predict_demand(product_id: str, horizon_days: int = 60):
+    model_bytes = redis_client.get(f"model:{product_id}")
+    if not model_bytes:
+        return {"error": f"Model not found for {product_id}"}
     
-    if predicted_demand > high_demand_threshold:
-        # High demand predicted: increase price by 5%
-        new_price = current_price * 1.05
-        print(f"High demand predicted ({predicted_demand:.2f} > {high_demand_threshold:.2f}). Increasing price to {new_price:.2f}.")
-    elif predicted_demand < low_demand_threshold:
-        # Low demand predicted: decrease price by 5% to stimulate demand
-        new_price = current_price * 0.95
-        print(f"Low demand predicted ({predicted_demand:.2f} < {low_demand_threshold:.2f}). Decreasing price to {new_price:.2f}.")
+    try:
+        model_data = pickle.loads(model_bytes)
+    except Exception as e:
+        return {"error": f"Failed to load model: {e}"}
+
+    model = model_data.get('model')
+    min_date = model_data.get('min_date', pd.Timestamp(datetime.utcnow().date()))
+    if isinstance(min_date, str):
+        min_date = pd.to_datetime(min_date)
+        
+    historical_mean = float(model_data.get('historical_sales_mean', 10.0))
+    historical_std = float(model_data.get('historical_sales_std', 0.0))
+    historical_price = float(model_data.get('historical_price', 99.99))
+    strategy = model_data.get('selected_strategy', 'xgb')
+    
+    predicted_demand = 0.0
+    
+    if strategy == 'xgb' and model is not None:
+        start_date = datetime.utcnow().date() + timedelta(days=1)
+        future_dates = [start_date + timedelta(days=i) for i in range(horizon_days)]
+        df_future = pd.DataFrame({'date': pd.to_datetime(future_dates)})
+        df_future = extract_time_features(df_future, min_date)
+        
+        for lag in [1, 7, 14, 30]:
+            df_future[f'sales_lag_{lag}'] = historical_mean
+            df_future[f'revenue_lag_{lag}'] = historical_mean * historical_price
+        for window in [7, 14]:
+            df_future[f'sales_rolling_mean_{window}'] = historical_mean
+            df_future[f'sales_rolling_std_{window}'] = historical_std
+            
+        df_future['is_out_of_stock'] = 0
+
+        feature_cols = model_data.get('feature_cols', [])
+        for col in feature_cols:
+            if col not in df_future.columns:
+                df_future[col] = 0
+        
+        X_future = df_future[feature_cols]
+        preds = model.predict(X_future)
+        preds = np.clip(preds, 0, None)
+        predicted_demand = float(np.sum(preds))
     else:
-        # Normal demand predicted: keep price stable
-        new_price = current_price
-        print(f"Normal demand predicted ({predicted_demand:.2f}). Keeping price stable at {new_price:.2f}.")
+        fallback_config = model_data.get('fallback_config', {})
+        fallback_type = fallback_config.get('type', 'mean')
+        if fallback_type in ['lag1', 'lag1_or_mean'] and 'last_sales' in fallback_config:
+            daily_rate = float(fallback_config['last_sales'])
+        else:
+            daily_rate = float(fallback_config.get('mean_sales', historical_mean))
         
-    return new_price
+        predicted_demand = float(daily_rate * horizon_days)
 
-def run_simulation(product_id, initial_data, model, feature_cols, steps=30):
-    """
-    Run the dynamic pricing simulation for a given number of steps.
-    """
-    print(f"Starting simulation for product {product_id}")
-    history = initial_data.copy()
-    avg_demand = history['sales'].mean()
+    predicted_demand = max(0, int(round(predicted_demand)))
+
+    result = {
+        "product_id": product_id,
+        "predicted_demand": predicted_demand,
+        "confidence_score": 0.85 if strategy == 'xgb' else 0.50,
+        "horizon_days": horizon_days
+    }
     
-    current_price = history.iloc[-1]['price']
-    simulation_results = []
+    redis_client_decoded.setex(f"prediction:{product_id}", 3600, json.dumps(result))
+    return result
+
+@app.post("/predict")
+def predict_endpoint(request: PredictRequest):
+    horizon = request.horizon_days
+    if request.months is not None:
+        horizon = int(request.months * 30.5)
+        
+    result = predict_demand(request.product_id, horizon)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
     
-    for step in range(1, steps + 1):
-        print(f"--- Step {step} ---")
-        # 1. Get the latest features for the model from our history
-        latest_features = history.iloc[[-1]][feature_cols]
+    if request.months is not None:
+        result["months"] = request.months
         
-        # 2. Predict demand for the next step
-        predicted_demand = predict_demand(model, latest_features)
-        
-        # 3. Adjust price using the predicted demand
-        new_price = adjust_price(current_price, predicted_demand, avg_demand)
-        
-        # 4. Log results
-        simulation_results.append({
-            'step': step,
-            'product_id': product_id,
-            'predicted_demand': predicted_demand,
-            'old_price': current_price,
-            'new_price': new_price
-        })
-        
-        # 5. Update current state for the next iteration (simulating the time step advancing)
-        current_price = new_price
-        
-    return pd.DataFrame(simulation_results)
+    return result
+
+@app.get("/health")
+def health():
+    return {"status": "healthy", "agent": "demand"}
+
+def log_to_neo4j(product_id, reasoning, result):
+    try:
+        with neo4j_driver.session() as session:
+            session.run('''
+                MERGE (p:Product {id: $product_id})
+                CREATE (d:DemandPrediction {
+                    predicted_demand: $demand,
+                    horizon_days: $horizon,
+                    confidence: $confidence,
+                    timestamp: datetime(),
+                    reasoning: $reasoning
+                })
+                CREATE (p)-[:HAS_PREDICTION]->(d)
+            ''', product_id=product_id, demand=result['predicted_demand'], 
+                 horizon=result['horizon_days'], confidence=result['confidence_score'],
+                 reasoning=str(reasoning))
+    except Exception as e:
+        print(f"Neo4j logging error: {e}")
+
+def kafka_consumer_loop():
+    print("Agent Popytu (Demand Agent) uruchomiony...")
+    try:
+        while True:
+            msg = consumer.poll(1.0)
+            if msg is None or msg.error(): continue
+            
+            topic = msg.topic()
+            data = json.loads(msg.value().decode('utf-8'))
+            
+            if topic == 'training_completed':
+                product_id = data.get('product_id', 'ALL')
+                pred_task = Task(
+                    description=f"Pobrano nowy model z Kafki. Opracuj predykcję popytu używając zaktualizowanych modeli dla {product_id}.",
+                    expected_output="Zgłoszenie pomyślnej aktualizacji popytu i wysłanie na kolejkę.",
+                    agent=analityk_popytu
+                )
+                crew = Crew(agents=[analityk_popytu], tasks=[pred_task], process=Process.sequential)
+                reasoning = crew.kickoff()
+                
+                if product_id != 'ALL':
+                    result = predict_demand(product_id, 60)
+                    if "error" not in result:
+                        log_to_neo4j(product_id, reasoning, result)
+                        producer.produce(
+                            'demand_predictions',
+                            key=product_id.encode('utf-8'),
+                            value=json.dumps(result).encode('utf-8')
+                        )
+                        producer.poll(0)
+    except Exception as e:
+        print(f"Błąd Agenta Popytu: {e}")
+    finally:
+        consumer.close()
+        producer.flush()
+
+if __name__ == "__main__":
+    threading.Thread(target=kafka_consumer_loop, daemon=True).start()
+    uvicorn.run(app, host="0.0.0.0", port=8001)

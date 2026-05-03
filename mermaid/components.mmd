@@ -1,49 +1,73 @@
-flowchart LR
-  subgraph Infra["Infrastruktura"]
-    K["Kafka"]
-    R1["Redis - trenowanie"]
-    R2["Redis - popyt"]
-    R3["Redis - zapasy"]
-    R4["Redis - ceny"]
-    R5["Redis - zaopatrzenie"]
-    DB[("SQLite")]
-  end
+flowchart TD
+    %% Styles
+    classDef actor fill:#eceff1,stroke:#90a4ae,stroke-width:2px
+    classDef agent fill:#e3f2fd,stroke:#4fc3f7,stroke-width:2px
+    classDef db fill:#fff3e0,stroke:#ffb74d,stroke-width:2px
+    classDef cache fill:#fce4ec,stroke:#e57373,stroke-width:2px,stroke-dasharray: 5 5
+    classDef broker fill:#e8f5e9,stroke:#81c784,stroke-width:3px
 
-  subgraph Services["Serwisy"]
-    T["Serwis trenowania"]
-    O["Orkiestrator"]
-  end
+    %% External Actors
+    Client([Outside Actors / Clients]):::actor
 
-  subgraph Agents["Agenci"]
-    D["Agent popytu"]
-    I["Agent zapasów"]
-    P["Agent cen"]
-    PR["Agent zaopatrzenia"]
-  end
+    %% Agents
+    subgraph Agents ["Agents & Services"]
+        Demand["Demand Agent (:8001)"]:::agent
+        Inventory["Inventory Agent (:8002)"]:::agent
+        Pricing["Pricing Agent (:8003)"]:::agent
+        Procurement["Procurement Agent (:8004)"]:::agent
+        Training["Training Service"]:::agent
+        Orch["Orchestrator"]:::agent
+    end
 
-  DB -->|sprzedaż| T
-  T -->|model:id| R1
-  T -->|trenowanie_gotowe| K
+    %% Endpoints
+    Client -- "POST API Requests" --> Orch
+    
+    Orch -- "Routes /predict" --> Demand
+    Orch -- "Routes /order" --> Inventory
+    Orch -- "Routes /price" --> Pricing
+    Orch -- "Routes /report, /ask" --> Procurement
 
-  K -->|zdarzenia| O
-  O -->|prognozy_popytu| K
-  O -->|aktualizacje_zapasów| K
-  O -->|aktualizacje_cen| K
+    %% Kafka
+    Kafka{{"Kafka Message Broker"}}:::broker
 
-  K -->|zmiany_w_bazie| D
-  D -->|prognoza:id| R2
-  D -->|prognozy_popytu| K
+    %% Databases
+    subgraph Databases ["Data Storage"]
+        DB[("SQLite\n(Central Database)")]:::db
+    end
 
-  K -->|prognozy_popytu| I
-  I -->|zamówienie:id| R3
-  I -->|aktualizuj_zapasy| DB
-  I -->|aktualizacje_zapasów| K
+    %% Redis Caches
+    subgraph Caches ["Redis Caches"]
+        R_Demand[("redis_demand")]:::cache
+        R_Inv[("redis_inventory")]:::cache
+        R_Price[("redis_pricing")]:::cache
+        R_Proc[("redis_procurement")]:::cache
+        R_Train[("redis_training")]:::cache
+    end
 
-  K -->|aktualizacje_zapasów| P
-  P -->|cena:id| R4
-  P -->|aktualizuj_ceny| DB
-  P -->|aktualizacje_cen| K
+    %% Cache connections
+    Demand -.- R_Demand
+    Inventory -.- R_Inv
+    Pricing -.- R_Price
+    Procurement -.- R_Proc
+    Training -.- R_Train
 
-  K -->|zmiany_w_bazie| PR
-  PR -->|model_zaop:id| R5
-  PR -->|raporty| K
+    %% DB connections
+    Training <-->|"Read/Write sales & inventory"| DB
+    Procurement -->|"Read sales & inventory"| DB
+    Inventory -->|"Update inventory"| DB
+    Pricing -->|"Update prices"| DB
+
+    %% Kafka Produces
+    Training -- "training_completed" --> Kafka
+    Demand -- "demand_predictions" --> Kafka
+    Inventory -- "inventory_updates" --> Kafka
+    Pricing -- "price_updates" --> Kafka
+    Procurement -- "procurement_reports\nprediction_error_alert" --> Kafka
+    Orch -- "database_changes (CDC)" --> Kafka
+
+    %% Kafka Consumes
+    Kafka -. "database_changes" .-> Training & Procurement
+    Kafka -. "training_completed" .-> Demand
+    Kafka -. "demand_predictions\ndatabase_cdc.sales" .-> Inventory
+    Kafka -. "inventory_updates\ndemand_predictions" .-> Pricing
+    Kafka -. "Subscribes to all topics\nfor routing & audit" .-> Orch

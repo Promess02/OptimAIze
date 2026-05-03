@@ -30,6 +30,9 @@ else:
     df_sales = pd.DataFrame(data)
     print(f"Created sample data with {len(df_sales)} records")
 
+# Ensure date column is in datetime format
+df_sales['date'] = pd.to_datetime(df_sales['date'])
+
 # 1. Agregacja danych o sprzedaży
 agg_sales = df_sales.groupby(['product_id', 'date']).agg({
     'sales': 'sum',
@@ -38,8 +41,16 @@ agg_sales = df_sales.groupby(['product_id', 'date']).agg({
     'stock': 'sum'
 }).reset_index()
 
+# Ensure the database file is writable (fixes Docker root ownership issue)
+db_file = 'ecommerce.db'
+if os.path.exists(db_file) and not os.access(db_file, os.W_OK):
+    raise PermissionError(
+        f"Cannot write to '{db_file}'. It may be owned by root. "
+        f"Run 'sudo chown $USER:$USER {db_file}' in your terminal to fix this."
+    )
+
 # Podłączenie do bazy SQLite
-conn = sqlite3.connect('ecommerce.db')
+conn = sqlite3.connect(db_file, timeout=30.0)
 cursor = conn.cursor()
 
 # Zapis zagregowanych sprzedaży do tabeli 'sales_aggregated'

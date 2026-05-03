@@ -292,25 +292,31 @@ def calculate_dynamic_price_rl(product_id, inventory_level, competitor_price=Non
         return {"error": str(e)}
 
 def calculate_dynamic_price(product_id, inventory_level):
-    """Calculate dynamic price based on inventory and predicted demand"""
+    """Calculate dynamic price based on inventory and predicted demand (Demand-to-Supply Ratio)"""
     try:
         current_inventory = get_current_inventory(product_id)
         effective_level = inventory_level if inventory_level > 0 else current_inventory
 
-        base_price = 99.99
+        snapshot = get_product_snapshot(product_id)
+        base_price = snapshot['current_price'] if snapshot['current_price'] > 0 else 99.99
 
-        if effective_level > 1000:
-            new_price = base_price * 0.85
-            reason = "High inventory level - applying 15% discount"
-        elif effective_level < 100:
+        demand_str = redis_client.get(f"latest_demand:{product_id}")
+        predicted_demand = int(demand_str) if demand_str else 100
+        
+        demand_supply_ratio = predicted_demand / max(effective_level, 1)
+
+        if demand_supply_ratio > 1.5:
             new_price = base_price * 1.15
-            reason = "Low inventory level - applying 15% premium"
-        elif effective_level < 300:
+            reason = f"High demand ratio ({demand_supply_ratio:.2f}) - applying 15% premium"
+        elif demand_supply_ratio > 1.1:
             new_price = base_price * 1.05
-            reason = "Medium-low inventory - applying 5% increase"
+            reason = f"Elevated demand ratio ({demand_supply_ratio:.2f}) - applying 5% premium"
+        elif demand_supply_ratio < 0.5:
+            new_price = base_price * 0.85
+            reason = f"Low demand ratio ({demand_supply_ratio:.2f}) - applying 15% discount"
         else:
             new_price = base_price
-            reason = "Normal inventory level"
+            reason = f"Balanced demand ratio ({demand_supply_ratio:.2f}) - normal pricing"
 
         min_price = base_price * 0.7 
         max_price = base_price * 1.3 
@@ -378,12 +384,20 @@ def kafka_consumer_loop():
             topic = msg.topic()
             data = json.loads(msg.value().decode('utf-8'))
             
+            if topic == 'demand_predictions':
+                product_id = data.get("product_id")
+                pred = data.get("predicted_demand", 100)
+                redis_client.setex(f"latest_demand:{product_id}", 86400, pred)
+                
             if topic == 'inventory_updates':
                 print(f"[Strateg Cenowy] Zmiana w zapasach, aktualizacja polityki cennika dla: {data}")
                 product_id = data.get("product_id")
                 
+                pred_str = redis_client.get(f"latest_demand:{product_id}")
+                predicted_demand = int(pred_str) if pred_str else 100
+
                 wycena_task = Task(
-                    description=f"Zaktualizowano rezerwy magazynowe w skutek prognozowanego popytu dla {product_id}. Sprawdź zgodność sugerowanej ceny z polityką firmy i oblicz optymalną cenę maksymalizującą zysk z zachowaniem minimalnej marży.",
+                    description=f"Zaktualizowano rezerwy magazynowe dla {product_id} do poziomu {data.get('quantity', 100)}. Prognozowany popyt to {predicted_demand}. Sprawdź zgodność sugerowanej ceny z polityką firmy i oblicz optymalną cenę maksymalizującą zysk z zachowaniem minimalnej marży.",
                     expected_output="Proponowana, nowa cena wyliczona jako float (np. 99.99).",
                     agent=strateg_cenowy
                 )

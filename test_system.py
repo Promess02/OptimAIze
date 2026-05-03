@@ -47,7 +47,7 @@ def run_demand_pretraining(limit=10):
         "-e DB_PATH=/data/ecommerce.db "
         "-e REDIS_HOST=redis_demand "
         "-e REDIS_PORT=6379 "
-        "training_service python /data/agents/demand/train_top10.py"
+        "training_service python /data/services/training/main.py --batch-train"
     )
     try:
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
