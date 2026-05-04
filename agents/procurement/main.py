@@ -42,37 +42,37 @@ DEFAULT_ORDER_COST = float(os.getenv("DEFAULT_ORDER_COST", "50"))
 DEFAULT_HOLDING_COST = float(os.getenv("DEFAULT_HOLDING_COST", "2"))
 
 BEST_XGB_PARAMS = {
-    "objective": "reg:squarederror",
-    "n_estimators": 200,
-    "max_depth": 6,
-    "learning_rate": 0.05,
-    "subsample": 0.8,
-    "colsample_bytree": 0.8,
+    "objective": "reg:pseudohubererror",
+    "eval_metric": "rmse",
+    "n_estimators": 3000,
+    "max_depth": 4,
+    "learning_rate": 0.03,
+    "min_child_weight": 5,
+    "subsample": 0.85,
+    "colsample_bytree": 0.85,
+    "reg_alpha": 0.2,
+    "reg_lambda": 2.0,
     "random_state": 42,
-    "tree_method": "hist",
-    "verbosity": 0,
 }
 
 FEATURE_COLUMNS = [
     "dayofweek",
     "month",
     "day",
-    "quarter",
     "year",
-    "day_of_year",
-    "is_month_end",
-    "is_quarter_end",
-    "days_since_start",
     "sales_lag_1",
     "sales_lag_7",
     "sales_lag_14",
     "sales_lag_30",
+    "revenue_lag_1",
+    "revenue_lag_7",
+    "revenue_lag_14",
+    "revenue_lag_30",
     "sales_rolling_mean_7",
     "sales_rolling_std_7",
     "sales_rolling_mean_14",
     "sales_rolling_std_14",
-    "sales_rolling_mean_30",
-    "sales_rolling_std_30",
+    "is_out_of_stock",
 ]
 
 redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
@@ -104,6 +104,12 @@ class AskRequest(BaseModel):
     question: str
     product_id: str | None = None
 
+def iqr_outlier_caps(series: pd.Series, iqr_mult: float = 3.0) -> tuple[float, float]:
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+    return float(q1 - iqr_mult * iqr), float(q3 + iqr_mult * iqr)
+
 
 def extract_time_features(df: pd.DataFrame, is_future: bool = False, min_date: pd.Timestamp | None = None):
     df = df.copy()
@@ -124,10 +130,19 @@ def extract_time_features(df: pd.DataFrame, is_future: bool = False, min_date: p
     if not is_future:
         for lag in [1, 7, 14, 30]:
             df[f"sales_lag_{lag}"] = df["sales"].shift(lag)
+            if "revenue" in df.columns:
+                df[f"revenue_lag_{lag}"] = df["revenue"].shift(lag)
+            else:
+                df[f"revenue_lag_{lag}"] = 0.0
 
         for window in [7, 14, 30]:
             df[f"sales_rolling_mean_{window}"] = df["sales"].rolling(window=window).mean()
             df[f"sales_rolling_std_{window}"] = df["sales"].rolling(window=window).std()
+
+        if "stock" in df.columns:
+            df["is_out_of_stock"] = (df["stock"] <= 0).astype(int)
+        else:
+            df["is_out_of_stock"] = 0
 
         df = df.bfill().ffill()
         df = df.fillna(df.mean(numeric_only=True))
@@ -168,7 +183,7 @@ def train_model_for_product(product_id: str) -> bool:
 
     with closing(get_connection()) as conn:
         df_sales = pd.read_sql(
-            "SELECT product_id, date, sales FROM sales_aggregated WHERE product_id = ? ORDER BY date",
+            "SELECT product_id, date, sales, revenue, price, stock FROM sales_aggregated WHERE product_id = ? ORDER BY date",
             conn,
             params=(product_id,),
         )
@@ -179,11 +194,15 @@ def train_model_for_product(product_id: str) -> bool:
     df_sales["date"] = pd.to_datetime(df_sales["date"])
     df_sales, min_date = extract_time_features(df_sales)
 
-    X_train = df_sales[FEATURE_COLUMNS]
-    y_train = df_sales["sales"]
+    train_mask = df_sales["stock"] > 0 if "stock" in df_sales.columns else pd.Series(True, index=df_sales.index)
+    X_train_fit = df_sales.loc[train_mask, FEATURE_COLUMNS]
+    y_train_fit = df_sales.loc[train_mask, "sales"].copy()
+    
+    cap_low, cap_high = iqr_outlier_caps(y_train_fit, iqr_mult=3.0)
+    y_train_fit = y_train_fit.clip(lower=cap_low, upper=cap_high)
 
     model = xgb.XGBRegressor(**BEST_XGB_PARAMS)
-    model.fit(X_train, y_train)
+    model.fit(X_train_fit, y_train_fit)
 
     payload = {
         "model": model,
@@ -191,6 +210,7 @@ def train_model_for_product(product_id: str) -> bool:
         "feature_cols": FEATURE_COLUMNS,
         "historical_sales_mean": float(df_sales["sales"].mean()),
         "historical_sales_std": float(df_sales["sales"].std() or 0.0),
+        "historical_price": float(df_sales["price"].mean()) if "price" in df_sales.columns and not df_sales.empty else 99.99,
         "trained_at": datetime.utcnow().isoformat(),
         "product_id": product_id,
     }
@@ -256,9 +276,10 @@ def monthly_forecast(product_id: str, months: int = 3) -> Dict:
 
     model = model_data["model"]
     min_date = model_data["min_date"]
-    feature_cols = model_data.get("feature_cols", ["dayofweek", "month", "year", "day", "days_since_start"])
+    feature_cols = model_data.get("feature_cols", FEATURE_COLUMNS)
     historical_sales_mean = float(model_data.get("historical_sales_mean", 0.0))
     historical_sales_std = float(model_data.get("historical_sales_std", 0.0))
+    historical_price = float(model_data.get("historical_price", 99.99))
 
     start_date = datetime.utcnow().date() + timedelta(days=1)
     horizon_days = int(months * 30.5)
@@ -269,10 +290,13 @@ def monthly_forecast(product_id: str, months: int = 3) -> Dict:
 
     for lag in [1, 7, 14, 30]:
         df_future[f"sales_lag_{lag}"] = historical_sales_mean
+        df_future[f"revenue_lag_{lag}"] = historical_sales_mean * historical_price
 
-    for window in [7, 14, 30]:
+    for window in [7, 14]:
         df_future[f"sales_rolling_mean_{window}"] = historical_sales_mean
         df_future[f"sales_rolling_std_{window}"] = historical_sales_std
+        
+    df_future["is_out_of_stock"] = 0
 
     for col in feature_cols:
         if col not in df_future.columns:

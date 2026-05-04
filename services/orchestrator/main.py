@@ -24,7 +24,8 @@ consumer.subscribe([
     'inventory_updates',
     'price_updates',
     'procurement_reports',
-    'prediction_error_alert'
+    'prediction_error_alert',
+    'database_changes'
 ])
 
 def delivery_report(err, msg):
@@ -88,26 +89,14 @@ try:
             state['pending_predictions'][product_id] = data
             logger.info(f"Demand prediction for {product_id}: {data.get('predicted_demand')}")
             
-            # Forward to inventory agent for processing
-            producer.produce(
-                'demand_predictions',
-                key=product_id.encode('utf-8'),
-                value=json.dumps(data).encode('utf-8'),
-                callback=delivery_report
-            )
+            producer.produce('events', key=product_id.encode('utf-8'), value=json.dumps({"type": "Audit", "event": "PredictionAudited"}).encode('utf-8'))
             producer.poll(0)
             
         elif topic == 'inventory_updates':
             product_id = data.get('product_id')
             logger.info(f"Inventory update for {product_id}: {data.get('action')}")
             
-            # Forward to pricing agent
-            producer.produce(
-                'inventory_updates',
-                key=product_id.encode('utf-8'),
-                value=json.dumps(data).encode('utf-8'),
-                callback=delivery_report
-            )
+            producer.produce('events', key=product_id.encode('utf-8'), value=json.dumps({"type": "Audit", "event": "InventoryAudited"}).encode('utf-8'))
             producer.poll(0)
             
         elif topic == 'price_updates':
@@ -127,6 +116,8 @@ try:
                 'horizons': [r.get('horizon_months') for r in data.get('reports', [])],
                 'products_limit': data.get('products_limit')
             }
+            producer.produce('reports', key='latest'.encode('utf-8'), value=json.dumps(state['last_procurement_report']).encode('utf-8'))
+            producer.poll(0)
             logger.info(
                 "Procurement report received: horizons=%s, limit=%s",
                 state['last_procurement_report']['horizons'],
@@ -148,6 +139,12 @@ try:
                 'requested_by': data.get('source_agent', 'procurement_agent'),
                 'timestamp': data.get('timestamp', datetime.now().isoformat()),
             })
+            
+        elif topic == 'database_changes':
+            event_type = data.get('event_type')
+            if event_type:
+                producer.produce('events', key=event_type.encode('utf-8'), value=json.dumps({"type": "System", "event": f"DatabaseChangeProcessed: {event_type}"}).encode('utf-8'))
+                producer.poll(0)
             
 except KeyboardInterrupt:
     logger.info("Shutting down Orchestrator")

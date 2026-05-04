@@ -1,0 +1,24 @@
+graph TD
+    subgraph Cases["Przypadki użycia"]
+        UC1["Zarejestruj sprzedaż"]
+        UC2["Trenuj modele"]
+        UC3["Prognozuj popyt"]
+        UC4["Wylicz zamówienie"]
+        UC5["Ustal cenę"]
+        UC6["Generuj raport"]
+        UC7["Sprawdź zdrowie"]
+    end
+    
+    CDC["Symulator CDC"]
+    USER["Operator/Użytkownik"]
+    
+    CDC -->|wyzwala| UC1
+    UC1 --> UC2
+    UC2 --> UC3
+    UC3 --> UC4
+    UC4 --> UC5
+    USER -->|zapytanie| UC3
+    USER -->|zapytanie| UC4
+    USER -->|zapytanie| UC5
+    USER -->|zapytanie| UC6
+    USER -->|zapytanie| UC7

@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent
 
 LOCAL_TESTS = [
     "test_demand_inventory_scenarios.py",
+    "test_pricing_rl_scenarios.py",
 ]
 
 INTEGRATION_TESTS = [
