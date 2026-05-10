@@ -93,6 +93,7 @@ def generate_order():
         preds = model.predict(X_future)
         preds = np.maximum(0, preds)
         
+        predicted_demand_30_days = int(np.sum(preds[:30]))
         predicted_demand_60_days = int(np.sum(preds))
 
         # 7. Porównanie ze stanem magazynowym
@@ -100,13 +101,16 @@ def generate_order():
         current_stock = int(stock_info[0]) if len(stock_info) > 0 else 0
 
         # Obliczamy ile musimy dokupić, by pokryć popyt w 100%
-        order_quantity = max(0, predicted_demand_60_days - current_stock)
+        order_quantity_30 = max(0, predicted_demand_30_days - current_stock)
+        order_quantity_60 = max(0, predicted_demand_60_days - current_stock)
 
         order_report.append({
             "product_id": pid,
-            "predicted_demand_2_months": predicted_demand_60_days,
             "current_inventory": current_stock,
-            "suggested_order_quantity": order_quantity
+            "predicted_demand_30_days": predicted_demand_30_days,
+            "suggested_order_quantity_30_days": order_quantity_30,
+            "predicted_demand_60_days": predicted_demand_60_days,
+            "suggested_order_quantity_60_days": order_quantity_60
         })
 
     return {
