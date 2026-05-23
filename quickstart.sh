@@ -35,6 +35,11 @@ fi
 echo -e "${YELLOW}[3/4]${NC} Starting Docker containers..."
 echo -e "${BLUE}This may take 1-2 minutes on first run...${NC}\n"
 
+# Clean up any conflicting containers first (e.g. from run_containers.sh)
+echo "Removing conflicting containers if they exist..."
+docker rm -f zookeeper kafka redis_training redis_demand redis_inventory redis_pricing redis_procurement neo4j training_service orchestrator demand_agent inventory_agent pricing_agent procurement_agent mongodb mongodb_init 2>/dev/null || true
+docker-compose down -v --remove-orphans 2>/dev/null || true
+
 if docker-compose up --build -d; then
     echo -e "${GREEN}✓ Containers started${NC}"
 else

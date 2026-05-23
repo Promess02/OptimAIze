@@ -390,13 +390,17 @@ def main():
     print_header("Event-Driven Multi-Agent ML System Setup & Test")
 
     print_step("1", "Initializing database...")
-    if not run_command("python /home/miko/magister/create_db.py", "Database initialization"):
-        print_error("Database initialization failed. Exiting.")
-        return False
-
     if not check_database():
-        print_error("Database verification failed. Exiting.")
-        return False
+        print_info("Database not found or invalid, running create_db.py...")
+        if not run_command("python /home/miko/magister/create_db.py", "Database initialization"):
+            print_error("Database initialization failed. Exiting.")
+            return False
+
+        if not check_database():
+            print_error("Database verification failed. Exiting.")
+            return False
+    else:
+        print_success("Database already initialized and verified.")
 
     time.sleep(2)
 

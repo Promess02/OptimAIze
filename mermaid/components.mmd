@@ -7,7 +7,7 @@ flowchart TD
     classDef broker fill:#e8f5e9,stroke:#81c784,stroke-width:3px
 
     %% External Actors
-    Client([Outside Actors / Clients]):::actor
+    Client([Outside Actors / Clients / CDC Simulator]):::actor
 
     %% Agents
     subgraph Agents ["Agents & Services"]
@@ -20,12 +20,10 @@ flowchart TD
     end
 
     %% Endpoints
-    Client -- "POST API Requests" --> Orch
-    
-    Orch -- "Routes /predict" --> Demand
-    Orch -- "Routes /order" --> Inventory
-    Orch -- "Routes /price" --> Pricing
-    Orch -- "Routes /report, /ask" --> Procurement
+    Client -- "POST /predict" --> Demand
+    Client -- "POST /order" --> Inventory
+    Client -- "POST /price, /price/rl" --> Pricing
+    Client -- "POST /report, /ask, /forecast" --> Procurement
 
     %% Kafka
     Kafka{{"Kafka Message Broker"}}:::broker
@@ -62,12 +60,13 @@ flowchart TD
     Demand -- "demand_predictions" --> Kafka
     Inventory -- "inventory_updates" --> Kafka
     Pricing -- "price_updates" --> Kafka
-    Procurement -- "procurement_reports\nprediction_error_alert" --> Kafka
-    Orch -- "database_changes (CDC)" --> Kafka
+    Procurement -- "procurement_reports\nprediction_error_alert\ntraining_completed" --> Kafka
+    Client -- "database_changes (CDC)" --> Kafka
+    Orch -- "events, reports\ndatabase_changes" --> Kafka
 
     %% Kafka Consumes
-    Kafka -. "database_changes" .-> Training & Procurement
-    Kafka -. "training_completed" .-> Demand
+    Kafka -. "database_changes" .-> Training & Procurement & Orch
+    Kafka -. "training_completed" .-> Demand & Orch
     Kafka -. "demand_predictions\ndatabase_cdc.sales" .-> Inventory
     Kafka -. "inventory_updates\ndemand_predictions" .-> Pricing
     Kafka -. "Subscribes to all topics\nfor routing & audit" .-> Orch
