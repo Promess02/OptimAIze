@@ -35,10 +35,13 @@ app = FastAPI(title="Demand Agent API")
 KAFKA_BROKER = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka:29092')
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis_demand')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+MODEL_REDIS_HOST = os.getenv('MODEL_REDIS_HOST', 'redis_training')
+MODEL_REDIS_PORT = int(os.getenv('MODEL_REDIS_PORT', REDIS_PORT))
 NEO4J_URI = os.getenv('NEO4J_URI', 'bolt://neo4j:7687')
 
 redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
 redis_client_decoded = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+model_redis_client = redis.Redis(host=MODEL_REDIS_HOST, port=MODEL_REDIS_PORT, decode_responses=False)
 neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=("neo4j", os.getenv("NEO4J_PASSWORD", "password")))
 
 class PredictRequest(BaseModel):
@@ -71,7 +74,7 @@ def extract_time_features(df, min_date):
     return df
 
 def predict_demand(product_id: str, horizon_days: int = 60):
-    model_bytes = redis_client.get(f"model:{product_id}")
+    model_bytes = model_redis_client.get(f"model:{product_id}")
     if not model_bytes:
         return {"error": f"Model not found for {product_id}"}
     

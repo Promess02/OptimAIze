@@ -7,3 +7,6 @@
 *.log
 *.keras
 *.pkl
+__pycache__/
+.pytest_cache/
+/ecommerce.db

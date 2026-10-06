@@ -1,0 +1,24 @@
+sequenceDiagram
+  participant CDC as Symulator CDC
+  participant K as Kafka
+  participant T as Serwis trenowania
+  participant O as Orkiestrator
+  participant D as Agent popytu
+  participant I as Agent zapasów
+  participant P as Agent cen
+  participant DB as SQLite
+
+  CDC->>DB: WSTAW sprzedaż
+  CDC->>K: opublikuj SprzedażZarejestrowana
+  K->>T: pobierz zmiany_w_bazie
+  T->>K: opublikuj trenowanie_gotowe
+  K->>O: pobierz trenowanie_gotowe
+  O->>K: wyślij ModeliBez aktualizacji
+  K->>D: pobierz zmiany/ModeliGotowe
+  D->>K: opublikuj prognozy_popytu
+  K->>I: pobierz prognozy_popytu
+  I->>DB: AKTUALIZUJ inventory.zapasy
+  I->>K: opublikuj aktualizacje_zapasów
+  K->>P: pobierz aktualizacje_zapasów
+  P->>DB: AKTUALIZUJ inventory.cena
+  P->>K: opublikuj aktualizacje_cen

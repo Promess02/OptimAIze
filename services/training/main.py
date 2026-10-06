@@ -231,9 +231,9 @@ def train_model_for_product(product_id):
         model = xgb.XGBRegressor(
             objective='reg:squarederror',
             eval_metric='rmse',
-            n_estimators=2000,
+            n_estimators=100,
             max_depth=4,
-            learning_rate=0.03,
+            learning_rate=0.05,
             min_child_weight=5,
             subsample=0.85,
             colsample_bytree=0.85,
@@ -241,8 +241,8 @@ def train_model_for_product(product_id):
             reg_lambda=2.0,
             tree_method='hist',
             random_state=42,
-            n_jobs=-1,
-            early_stopping_rounds=120,
+            n_jobs=1,
+            early_stopping_rounds=10,
         )
 
         selected_strategy = 'xgb'

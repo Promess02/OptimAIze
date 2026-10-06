@@ -1,0 +1,82 @@
+CEL I ZAKRES APLIKACJI
+
+CEL APLIKACJI
+
+Celem projektowanej aplikacji jest opracowanie oraz weryfikacja koncepcji event-driven systemu wieloagentowego wspierającego decyzje operacyjne w środowisku e-commerce. System został zaprojektowany jako platforma łącząca metody uczenia maszynowego z rozproszoną architekturą agentową, tak aby możliwe było automatyczne, spójne i powtarzalne podejmowanie decyzji w trzech kluczowych obszarach biznesowych: prognozowaniu popytu, zarządzaniu zapasami oraz dynamicznym kształtowaniu cen.
+
+W ujęciu badawczym aplikacja realizuje cel poznawczy i inżynierski. Cel poznawczy polega na sprawdzeniu, czy współpraca wyspecjalizowanych agentów, komunikujących się przez zdarzenia i API, pozwala efektywnie przetwarzać dane sprzedażowe na decyzje operacyjne. Cel inżynierski polega na implementacji prototypu, który można uruchomić w środowisku kontenerowym i testować na realistycznych danych historycznych. Tym samym system pełni podwójną funkcję: z jednej strony stanowi demonstrator architektury wieloagentowej, z drugiej strony jest środowiskiem eksperymentalnym do porównywania jakości modeli predykcyjnych i polityk decyzyjnych.
+
+Podstawowym założeniem jest rozdział odpowiedzialności pomiędzy agentów:
+- agent popytu (Demand Agent) odpowiada za predykcję przyszłej sprzedaży,
+- agent magazynowy (Inventory Agent) odpowiada za decyzje uzupełniania zapasu,
+- agent cenowy (Pricing Agent) odpowiada za modyfikację cen w zależności od stanu zapasu i sygnałów popytowych,
+- agent zakupowy (Procurement Agent) rozszerza system o dłuższy horyzont planowania zaopatrzenia.
+
+Takie podejście ma ograniczać monolityczność logiki biznesowej, zwiększać interpretowalność przepływu decyzji oraz ułatwiać niezależny rozwój komponentów. Każdy agent realizuje wyspecjalizowane zadania, ale jednocześnie jest częścią jednolitego przepływu danych sterowanego zdarzeniami. W efekcie aplikacja odpowiada na praktyczny problem badawczy: jak połączyć modele ML i architekturę eventową w spójny mechanizm automatyzacji decyzji dla łańcucha dostaw i polityki cenowej.
+
+Istotnym celem pracy jest również zapewnienie replikowalności eksperymentów. Dlatego system został osadzony w środowisku Docker Compose, z jawnie zdefiniowanymi serwisami, zależnościami i kanałami komunikacji. Taki sposób implementacji pozwala odtworzyć warunki badań, uruchamiać scenariusze testowe i symulacyjne oraz analizować zachowanie systemu przy zmianach danych wejściowych.
+
+Należy podkreślić, że obecna wersja rozwiązania ma status prototypu badawczo-rozwojowego. Oznacza to, że część elementów jest już implementacyjnie dostępna i testowalna, natomiast część pozostaje na etapie dalszych prac rozwojowych. Opis celu uwzględnia więc zarówno aktualnie działające mechanizmy, jak i docelową wizję ich pełnej integracji.
+
+
+ZAKRES APLIKACJI
+
+Zakres aplikacji obejmuje warstwę architektury systemowej, warstwę danych, warstwę modeli ML, mechanizmy komunikacji międzykomponentowej, konteneryzację środowiska, a także procedury weryfikacji i analizy wyników.
+
+W zakresie architektury logicznej system składa się z następujących komponentów:
+- Training Service, odpowiedzialny za asynchroniczne trenowanie modeli predykcyjnych (XGBoost) na danych sprzedażowych,
+- Orchestrator, odpowiedzialny za koordynację przepływów zdarzeń i obsługę przebiegu procesu między agentami,
+- Demand Agent, Inventory Agent, Pricing Agent i Procurement Agent jako wyspecjalizowane moduły decyzyjne,
+- infrastruktura komunikacyjna i składowania: Kafka, Redis, SQLite oraz Neo4j.
+
+Zakres komunikacji i integracji między komponentami obejmuje dwa komplementarne mechanizmy:
+1. Komunikację asynchroniczną typu event-driven przez Apache Kafka.
+   W systemie zdefiniowano topiki, m.in. database_changes, training_completed, demand_predictions, inventory_updates i price_updates. Dzięki temu możliwa jest propagacja zmian danych oraz kaskadowe uruchamianie kolejnych etapów procesu decyzyjnego.
+2. Komunikację synchroniczną przez REST API.
+   Agenci udostępniają endpointy HTTP (m.in. /predict, /order, /price, /health), co pozwala zarówno na testy integracyjne, jak i bezpośrednie wywoływanie funkcji decyzyjnych z poziomu klienta lub narzędzi testowych.
+
+Zakres dataflow systemu obejmuje pełny łańcuch przetwarzania:
+- rejestracja zdarzenia sprzedażowego lub zmiany danych,
+- publikacja zdarzenia CDC do Kafki,
+- reakcja serwisu treningowego i aktualizacja modeli,
+- wygenerowanie predykcji popytu przez agenta popytu,
+- wyznaczenie decyzji magazynowej przez agenta inventory,
+- wyznaczenie decyzji cenowej przez agenta pricing,
+- rejestracja decyzji i śladów reasoning w komponentach danych.
+
+W ten sposób system realizuje przepływ od danych historycznych i bieżących sygnałów operacyjnych do konkretnych rekomendacji biznesowych. Zakres obejmuje również możliwość uruchamiania symulacji zdarzeń CDC, które odtwarzają napływ transakcji i umożliwiają obserwację reakcji całego pipeline'u.
+
+Zakres infrastrukturalny obejmuje konteneryzację wszystkich głównych usług. W środowisku Docker Compose uruchamiane są: broker Kafka (z Zookeeperem), bazy danych (SQLite jako baza centralna, Neo4j jako graf śladów decyzyjnych, MongoDB jako element rozszerzający), instancje Redis dedykowane poszczególnym komponentom, a także kontenery usług i agentów. Taka organizacja umożliwia separację odpowiedzialności, kontrolę zależności środowiskowych i testowanie systemu w warunkach zbliżonych do produkcyjnych.
+
+Zakres warstwy danych obejmuje z góry zdefiniowaną strukturę, z którą system współpracuje:
+- tabela sales_aggregated zawierająca dane historyczne (m.in. product_id, date, sales, revenue, price, stock),
+- tabela inventory zawierająca aktualny stan magazynowy i cenę (m.in. product_id, current_stock, price),
+- klucze cache Redis przechowujące modele i wyniki pośrednie (np. model:{product_id}, prediction:{product_id}, order:{product_id}, price:{product_id}).
+
+Ustandaryzowana struktura danych jest krytyczna dla poprawnego działania całego systemu, ponieważ determinuje:
+- sposób przygotowania cech dla modeli ML,
+- kontrakty payloadów REST i komunikatów Kafka,
+- możliwość reprodukcji eksperymentów oraz porównywania scenariuszy.
+
+Zakres modelowania i analityki obejmuje serię notatników Jupyter, które dokumentują i wspierają proces uczenia modeli oraz interpretację wyników. W szczególności:
+- notebook popytowy realizuje analizę szeregów czasowych i porównanie modeli predykcyjnych,
+- notebook inventory realizuje klasyfikację ABC/XYZ oraz wyznaczanie ROP i EOQ,
+- notebook pricing realizuje symulację dynamic pricing vs pricing statyczny,
+- dodatkowe notebooki analityczne realizują analizy korelacji, klasteryzacji oraz wizualizacje pomocnicze.
+
+Zakres badań obejmuje więc nie tylko implementację usług runtime, ale także metodyczną warstwę eksperymentalną: analizy, wizualizacje i benchmarki modeli. Dzięki temu możliwe jest zarówno ilościowe, jak i jakościowe uzasadnienie przyjętych decyzji projektowych.
+
+Zakres weryfikacji działania obejmuje:
+- testy scenariuszowe dla agentów i logiki decyzyjnej,
+- testy integracyjne end-to-end dla przepływu między agentami,
+- skrypty uruchamiające zestawy testowe,
+- health-checki usług i endpointów,
+- symulacje zdarzeń CDC uruchamiające przepływ eventowy.
+
+W praktyce oznacza to, że poprawność systemu jest oceniana na kilku poziomach: funkcjonalnym (czy endpoint zwraca poprawną odpowiedź), integracyjnym (czy kolejne komponenty przekazują sobie dane), oraz operacyjnym (czy środowisko kontenerowe i kolejka zdarzeń działają stabilnie).
+
+Zakres aplikacji obejmuje także mechanizm reakcji agentów na zmiany w bazie centralnej. Zmiana danych sprzedażowych inicjuje zdarzenia, które mogą prowadzić do retreningu modeli, odświeżenia predykcji popytu, ponownego przeliczenia decyzji magazynowych i dostosowania cen. Dzięki temu system odzwierciedla dynamiczny charakter środowiska e-commerce, w którym decyzje powinny być aktualizowane wraz z napływem nowych danych.
+
+Jednocześnie należy jasno zaznaczyć granice obecnego stanu implementacji. Projekt jest rozwijany etapowo i nie wszystkie elementy mają poziom dojrzałości produkcyjnej. Część komponentów ma charakter eksperymentalny, a w niektórych obszarach występują jeszcze luki testowe oraz uproszczenia typowe dla fazy prototypowania. Nie zmienia to jednak faktu, że aktualna wersja systemu stanowi spójny fundament badawczy i techniczny do dalszego rozwijania pełnej architektury wieloagentowej.
+
+Podsumowując, zakres aplikacji obejmuje kompletny ekosystem badawczo-implementacyjny: od danych i modeli, przez komunikację eventową i API, po konteneryzację, testy i analizę wyników. Taki zakres jest adekwatny do pracy magisterskiej o profilu inżyniersko-badawczym, ponieważ umożliwia równoczesną ocenę jakości rozwiązań algorytmicznych oraz jakości zaprojektowanej architektury systemowej.

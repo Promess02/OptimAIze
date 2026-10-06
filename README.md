@@ -25,19 +25,38 @@ The system consists of:
 - Docker & Docker Compose
 - Python 3.11+
 
+### Repository layout
+
+```text
+OptimAIze/
+├── setup.sh / train_models.sh / run_tests.sh   # entrypoints
+├── docker-compose.yml, README.md, requirements.txt
+├── data/          # ecommerce.db and data artifacts
+├── scripts/       # create_db, CDC simulators, migrations, demos
+│   └── legacy/    # older standalone prototypes
+├── test/          # unit + integration tests
+├── notebooks/     # exploratory Jupyter notebooks
+├── docs/          # project docs + mermaid/ diagrams
+├── agents/        # demand, inventory, pricing, procurement (+ domain notebooks)
+├── services/      # training, orchestrator
+├── shared/        # shared.paths + CDC helpers
+├── playground/    # demo UI
+└── models/        # trained model cache
+```
+
+Paths resolve via `shared/paths.py` (override with `DB_PATH`, `DATA_DIR`, `REPO_ROOT`).
+
 ### Setup
 
-1. **Create the database**:
+Trzy skrypty uruchomieniowe:
+
 ```bash
-python create_db.py
+./setup.sh          # baza (data/ecommerce.db) + kontenery
+./train_models.sh   # trening modeli popytu
+./run_tests.sh      # testy jednostkowe + integracyjne
 ```
 
-2. **Start all services**:
-```bash
-docker-compose up --build
-```
-
-This will start:
+`setup.sh` uruchamia m.in.:
 - Zookeeper (port 2181)
 - Kafka (port 9092)
 - Neo4j (ports 7474, 7687)
@@ -47,6 +66,14 @@ This will start:
 - Demand Agent (HTTP: 8001)
 - Inventory Agent (HTTP: 8002)
 - Pricing Agent (HTTP: 8003)
+- Procurement Agent (HTTP: 8004)
+
+Playground UI (opcjonalnie):
+```bash
+cd playground && pip install -r requirements.txt
+uvicorn server:app --host 0.0.0.0 --port 8090
+```
+W UI (http://localhost:8090): zakładka **Operacje** — trening modeli i testy z postępem; zakładka **Zamówienia** — propozycje zakupu.
 
 ### Usage
 
@@ -82,21 +109,18 @@ curl http://localhost:8003/health
 
 #### Simulating CDC Events
 
-Run the CDC simulator to trigger automatic retraining and agent workflows:
-
 ```bash
-# Install dependencies
 pip install confluent-kafka
-
-# Run simulator
+# lightweight simulator
 python shared/cdc_simulator.py
+# or richer simulator with progress / more events
+python scripts/enhanced_cdc_simulator.py
 ```
 
-This will:
-1. Simulate sales transactions
-2. Emit `SalesCreated` CDC events to Kafka
-3. Trigger model retraining in Training Service
-4. Cascade predictions through all agents
+Database bootstrap (if needed without `./setup.sh`):
+```bash
+python scripts/create_db.py
+```
 
 ## Event Flow
 

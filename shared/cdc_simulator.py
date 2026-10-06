@@ -9,8 +9,15 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+from pathlib import Path
+
+try:
+    from shared.paths import DB_PATH as _DEFAULT_DB
+except ImportError:
+    _DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "ecommerce.db"
+
 KAFKA_BROKER = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
-DB_PATH = os.getenv('DB_PATH', './ecommerce.db')
+DB_PATH = os.getenv('DB_PATH', str(_DEFAULT_DB))
 
 producer_conf = {'bootstrap.servers': KAFKA_BROKER}
 producer = Producer(producer_conf)

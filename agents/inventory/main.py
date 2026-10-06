@@ -54,7 +54,7 @@ KAFKA_BROKER = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka:29092')
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis_inventory')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 NEO4J_URI = os.getenv('NEO4J_URI', 'bolt://neo4j:7687')
-DB_PATH = os.getenv('DB_PATH', './ecommerce.db')
+DB_PATH = os.getenv('DB_PATH', '/data/ecommerce.db')
 
 redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=("neo4j", os.getenv("NEO4J_PASSWORD", "password")))

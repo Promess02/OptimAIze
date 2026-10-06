@@ -64,16 +64,21 @@ services:
       mongodb:
         condition: service_healthy
     working_dir: /app
+    environment:
+      - PYTHONPATH=/app
+      - DB_PATH=/app/data/ecommerce.db
     command: >
       sh -c "
       pip install --no-cache-dir pymongo &&
-      python sqlite_to_mongodb.py
-      --sqlite-path /app/ecommerce.db
+      python scripts/sqlite_to_mongodb.py
+      --sqlite-path /app/data/ecommerce.db
       --mongo-uri mongodb://mongodb:27017
       --mongo-db ecommerce
       "
     volumes:
-      - ./:/app
+      - ./scripts:/app/scripts
+      - ./data:/app/data
+      - ./shared:/app/shared
     restart: "no"
     networks:
       - agent_network
@@ -132,7 +137,7 @@ services:
       - DB_PATH=/data/ecommerce.db
       - MODELS_PATH=/models
     volumes:
-      - ./:/data
+      - ./data/ecommerce.db:/data/ecommerce.db
       - ./models:/models
     networks:
       - agent_network
@@ -162,6 +167,8 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - REDIS_HOST=redis_demand
       - REDIS_PORT=6379
+      - MODEL_REDIS_HOST=redis_training
+      - MODEL_REDIS_PORT=6379
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_PASSWORD=password
     networks:
@@ -183,6 +190,9 @@ services:
       - REDIS_PORT=6379
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_PASSWORD=password
+      - DB_PATH=/data/ecommerce.db
+    volumes:
+      - ./data/ecommerce.db:/data/ecommerce.db
     networks:
       - agent_network
 
@@ -202,6 +212,9 @@ services:
       - REDIS_PORT=6379
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_PASSWORD=password
+      - DB_PATH=/data/ecommerce.db
+    volumes:
+      - ./data/ecommerce.db:/data/ecommerce.db
     networks:
       - agent_network
 
@@ -223,7 +236,7 @@ services:
       - SCHEDULE_MINUTES=30
       - TOP_PRODUCTS_LIMIT=10
     volumes:
-      - ./:/data
+      - ./data/ecommerce.db:/data/ecommerce.db
       - ./models:/models
     networks:
       - agent_network

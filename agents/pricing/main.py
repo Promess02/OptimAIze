@@ -57,7 +57,7 @@ KAFKA_BROKER = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka:29092')
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis_pricing')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 NEO4J_URI = os.getenv('NEO4J_URI', 'bolt://neo4j:7687')
-DB_PATH = os.getenv('DB_PATH', './ecommerce.db')
+DB_PATH = os.getenv('DB_PATH', '/data/ecommerce.db')
 MODELS_PATH = os.getenv('MODELS_PATH', '/models')
 PRICING_MODE = os.getenv('PRICING_MODE', 'rl').lower()
 
